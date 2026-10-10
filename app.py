@@ -1,51 +1,35 @@
-from flask import Flask, request
+from flask import Flask
+from threading import Thread
+import os
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import google.generativeai as genai
-import requests
 
-app = Flask(__name__)
+app_flask = Flask('')
+@app_flask.route('/')
+def home(): return "Bot is Alive!"
+def run_flask(): app_flask.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+Thread(target=run_flask).start()
 
-# REPLACE THIS WITH YOUR GEMINI KEY FROM aistudio.google.com
-GEMINI_KEY = "AQ.Ab8RN6LLUKBM9I4OlpeaGR3gVOaCvmbzCR2i5EST0rqL-IBhFQ"
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+ADMIN_ID = os.environ.get("ADMIN_ID")
 
-genai.configure(api_key=GEMINI_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-SYSTEM_PROMPT = """You are Gemini Code Builder, a WhatsApp helper that builds apps.
-Give working code, short answers, file names first.
-"""
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Hi! Bot is live 🤖 Send me anything!")
 
-@app.route("/")
-def home():
-    return "Gemini Bot is Running! Go to /webhook"
-
-@app.route("/webhook", methods=["GET", "POST"])
-def webhook():
-    if request.method == "GET":
-        if request.args.get("hub.verify_token") == "my_bot":
-            return request.args.get("hub.challenge")
-        return "Wrong token"
-
-    data = request.get_json()
+async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        entry = data['entry'][0]['changes'][0]['value']
-        if 'messages' not in entry:
-            return "OK", 200
-
-        msg = entry['messages'][0]
-        from_num = msg['from']
-        text = msg['text']['body']
-
-        print(f"User {from_num}: {text}")
-
-        resp = model.generate_content(SYSTEM_PROMPT + "\nUser: " + text)
-        reply_text = resp.text
-
-        print(f"Gemini replied: {reply_text[:200]}")
-        return "OK", 200
-
+        response = model.generate_content(update.message.text)
+        await update.message.reply_text(response.text)
     except Exception as e:
-        print(f"Error: {e}")
-        return "OK", 200
+        await update.message.reply_text(f"Error: {e}")
 
-if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+bot_app = Application.builder().token(BOT_TOKEN).build()
+bot_app.add_handler(CommandHandler("start", start))
+bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+print("Bot started...")
+bot_app.run_polling()
