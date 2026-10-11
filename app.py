@@ -1,35 +1,61 @@
-from flask import Flask
-from threading import Thread
 import os
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
+import requests
+from flask import Flask, request
+from groq import Groq
 
-app_flask = Flask('')
-@app_flask.route('/')
-def home(): return "Bot is Alive!"
-def run_flask(): app_flask.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
-Thread(target=run_flask).start()
+app = Flask(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-ADMIN_ID = os.environ.get("ADMIN_ID")
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "karen123")
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
+PHONE_ID = os.environ.get("PHONE_NUMBER_ID")
+GROQ_KEY = os.environ.get("GROQ_API_KEY")
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hi! Bot is live 🤖 Send me anything!")
+@app.route("/")
+def home():
+    return "WhatsApp Bot LIVE"
 
-async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@app.route("/webhook", methods=["GET"])
+def verify_webhook():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return challenge, 200
+    return "fail", 403
+
+@app.route("/webhook", methods=["POST"])
+def receive():
+    data = request.get_json()
     try:
-        response = model.generate_content(update.message.text)
-        await update.message.reply_text(response.text)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+        if data.get("object") == "whatsapp_business_account":
+            msg_obj = data["entry"][0]["changes"][0]["value"]
+            if "messages" in msg_obj:
+                from_number = msg_obj["messages"][0]["from"]
+                text = msg_obj["messages"][0]["text"]["body"]
 
-bot_app = Application.builder().token(BOT_TOKEN).build()
-bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-print("Bot started...")
-bot_app.run_polling()
+                # AI answer
+                ai_text = ask_groq(text)
+                send_whatsapp(from_number, ai_text)
+    except Exception as e:
+        print(e)
+    return "ok", 200
+
+def ask_groq(prompt):
+    if not groq_client:
+        return "Bot not ready - missing GROQ key"
+    r = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role":"user","content":prompt}]
+    )
+    return r.choices[0].message.content
+
+def send_whatsapp(to, message):
+    url = f"https://graph.facebook.com/v20.0/{PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type":"application/json"}
+    payload = {"messaging_product":"whatsapp","to":to,"type":"text","text":{"body":message}}
+    requests.post(url, headers=headers, json=payload)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
